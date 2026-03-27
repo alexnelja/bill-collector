@@ -3,6 +3,7 @@ import { config } from "./config";
 import { logger } from "./utils/logger";
 import webhookRoutes from "./routes/webhooks";
 import authRoutes from "./routes/auth";
+import historyRoutes from "./routes/history";
 import { startTelegramBot, stopTelegramBot } from "./services/channels/telegram";
 import { startEmailListener, stopEmailListener } from "./services/channels/email";
 
@@ -15,6 +16,7 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 app.use(webhookRoutes);
 app.use(authRoutes);
+app.use(historyRoutes);
 
 // Landing page
 app.get("/", (_req, res) => {

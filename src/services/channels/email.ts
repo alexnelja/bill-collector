@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { config } from "../../config";
 import { IncomingDocument } from "../../types";
 import { processDocument } from "../../pipeline/processor";
+import { processingQueue } from "../queue";
 import { logger } from "../../utils/logger";
 
 let imapClient: Imap | null = null;
@@ -143,7 +144,7 @@ async function processEmail(rawEmail: string): Promise<void> {
       receivedAt: new Date(),
     };
 
-    const result = await processDocument(doc);
+    const result = await processingQueue.enqueue(() => processDocument(doc));
 
     if (result.status === "saved") {
       logger.info(

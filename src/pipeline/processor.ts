@@ -4,19 +4,24 @@ import {
   ProcessingResult,
   CostCentreSuggestion,
   AccountingContact,
-  AccountingTransaction,
 } from "../types";
 import { extractDocumentData } from "../services/ocr/extractor";
 import { getAccountingProvider } from "../services/accounting";
+import { DuplicateDetector } from "../services/dedup";
+import { historyStore } from "../services/history";
 import { config } from "../config";
 import { logger } from "../utils/logger";
 
+const dedup = new DuplicateDetector();
+
 /**
  * Main processing pipeline:
- * 1. OCR extraction via Claude Vision
+ * 0. Duplicate detection
+ * 1. OCR extraction via Claude Vision (with image preprocessing + Zod validation)
  * 2. Contact matching against QuickBooks/Xero
  * 3. Cost centre suggestion from past transactions
  * 4. Save as Bill (invoice) or Expense (receipt)
+ * 5. Record in history
  */
 export async function processDocument(
   doc: IncomingDocument
@@ -28,9 +33,24 @@ export async function processDocument(
   };
 
   try {
+    // ── Step 0: Duplicate Detection ─────────────────────────────────────
+    const contentHash = dedup.computeHash(doc.file.base64, doc.file.mimeType);
+    if (dedup.isDuplicate(doc.file.base64, doc.file.mimeType)) {
+      const prevId = dedup.getPreviousResultId(contentHash);
+      logger.warn(
+        `[${result.id}] Duplicate document detected (previously processed as ${prevId})`
+      );
+      result.status = "failed";
+      result.error = `Duplicate document — previously processed as ${prevId}`;
+      historyStore.save(result);
+      return result;
+    }
+
     // ── Step 1: OCR Extraction ──────────────────────────────────────────
     result.status = "extracting";
-    logger.info(`[${result.id}] Step 1: Extracting data from ${doc.file.mimeType}`);
+    logger.info(
+      `[${result.id}] Step 1: Extracting data from ${doc.file.mimeType}`
+    );
 
     result.extractedData = await extractDocumentData(
       doc.file.base64,
@@ -65,10 +85,7 @@ export async function processDocument(
     let costCentre: string | undefined = config.defaultCostCentre || undefined;
 
     if (matchedContact) {
-      const suggestion = await suggestCostCentre(
-        provider,
-        matchedContact
-      );
+      const suggestion = await suggestCostCentre(provider, matchedContact);
       if (suggestion) {
         result.costCentreSuggestion = suggestion;
         costCentre = suggestion.costCentre;
@@ -111,6 +128,10 @@ export async function processDocument(
       `[${result.id}] Done! ${docType === "invoice" ? "Bill" : "Expense"} #${result.accountingRecordId} created`
     );
 
+    // Record successful processing and mark as seen for dedup
+    dedup.recordProcessed(contentHash, result.accountingRecordId || result.id);
+    historyStore.save(result);
+
     return result;
   } catch (error) {
     result.status = "failed";
@@ -119,6 +140,7 @@ export async function processDocument(
     logger.error(`[${result.id}] Processing failed: ${result.error}`, {
       error,
     });
+    historyStore.save(result);
     return result;
   }
 }
@@ -135,7 +157,6 @@ async function suggestCostCentre(
 
     if (transactions.length === 0) return null;
 
-    // Count cost centre occurrences
     const costCentreCount = new Map<string, number>();
     const accountCodeCount = new Map<string, number>();
 
@@ -154,7 +175,6 @@ async function suggestCostCentre(
       }
     }
 
-    // Find the most common cost centre
     let topCostCentre = "";
     let topCount = 0;
     for (const [cc, count] of costCentreCount) {
@@ -164,7 +184,6 @@ async function suggestCostCentre(
       }
     }
 
-    // Find the most common account code
     let topAccountCode = "";
     let topAccCount = 0;
     for (const [ac, count] of accountCodeCount) {

@@ -3,6 +3,7 @@ import twilio from "twilio";
 import { config } from "../../config";
 import { IncomingDocument } from "../../types";
 import { processDocument } from "../../pipeline/processor";
+import { processingQueue } from "../queue";
 import { logger } from "../../utils/logger";
 import { Request, Response } from "express";
 
@@ -67,7 +68,7 @@ export async function handleWhatsAppWebhook(
       receivedAt: new Date(),
     };
 
-    const result = await processDocument(doc);
+    const result = await processingQueue.enqueue(() => processDocument(doc));
 
     if (result.status === "saved" && result.extractedData) {
       const d = result.extractedData;

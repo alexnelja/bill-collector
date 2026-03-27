@@ -1,7 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../../config";
-import { ExtractedData, DocumentType, LineItem } from "../../types";
+import { ExtractedData } from "../../types";
 import { logger } from "../../utils/logger";
+import { parseOcrOutput } from "./schemas";
+import { preprocessImage } from "./preprocess";
 
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -53,7 +55,12 @@ export async function extractDocumentData(
 ): Promise<ExtractedData> {
   logger.info("Starting OCR extraction with Claude Vision");
 
-  const mediaType = mimeType as
+  // Preprocess: resize large images to optimal dimensions for Claude Vision
+  const preprocessed = await preprocessImage(base64Content, mimeType);
+  const processedBase64 = preprocessed.base64;
+  const processedMimeType = preprocessed.mimeType;
+
+  const mediaType = processedMimeType as
     | "image/jpeg"
     | "image/png"
     | "image/gif"
@@ -68,7 +75,7 @@ export async function extractDocumentData(
       source: {
         type: "base64",
         media_type: "application/pdf",
-        data: base64Content,
+        data: processedBase64,
       },
     });
   } else {
@@ -77,7 +84,7 @@ export async function extractDocumentData(
       source: {
         type: "base64",
         media_type: mediaType,
-        data: base64Content,
+        data: processedBase64,
       },
     });
   }
@@ -118,22 +125,8 @@ export async function extractDocumentData(
 
   const parsed = JSON.parse(jsonText);
 
-  const extracted: ExtractedData = {
-    documentType: validateDocumentType(parsed.documentType),
-    vendorName: parsed.vendorName || "Unknown Vendor",
-    documentNumber: parsed.documentNumber || undefined,
-    date: parsed.date || new Date().toISOString().split("T")[0],
-    dueDate: parsed.dueDate || undefined,
-    currency: parsed.currency || "USD",
-    subtotal: Number(parsed.subtotal) || 0,
-    taxAmount: Number(parsed.taxAmount) || 0,
-    totalAmount: Number(parsed.totalAmount) || 0,
-    taxRate: parsed.taxRate != null ? Number(parsed.taxRate) : undefined,
-    lineItems: parseLineItems(parsed.lineItems),
-    paymentMethod: parsed.paymentMethod || undefined,
-    notes: parsed.notes || undefined,
-    confidence: Number(parsed.confidence) || 0.5,
-  };
+  // Validate and coerce with Zod schema
+  const extracted = parseOcrOutput(parsed);
 
   // If total is 0 but we have line items, sum them up
   if (extracted.totalAmount === 0 && extracted.lineItems.length > 0) {
@@ -148,20 +141,4 @@ export async function extractDocumentData(
   );
 
   return extracted;
-}
-
-function validateDocumentType(type: string): DocumentType {
-  if (type === "invoice" || type === "receipt") return type;
-  return "unknown";
-}
-
-function parseLineItems(items: unknown): LineItem[] {
-  if (!Array.isArray(items)) return [];
-  return items.map((item: Record<string, unknown>) => ({
-    description: String(item.description || ""),
-    quantity: Number(item.quantity) || 1,
-    unitPrice: Number(item.unitPrice) || 0,
-    amount: Number(item.amount) || 0,
-    taxAmount: item.taxAmount != null ? Number(item.taxAmount) : undefined,
-  }));
 }

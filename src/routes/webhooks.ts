@@ -3,6 +3,7 @@ import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import { handleWhatsAppWebhook } from "../services/channels/whatsapp";
 import { processDocument } from "../pipeline/processor";
+import { processingQueue } from "../services/queue";
 import { IncomingDocument } from "../types";
 import { logger } from "../utils/logger";
 
@@ -52,7 +53,7 @@ router.post("/api/upload", upload.single("file"), async (req: Request, res: Resp
 
     logger.info(`API upload: ${file.originalname} (${file.mimetype}, ${file.size} bytes)`);
 
-    const result = await processDocument(doc);
+    const result = await processingQueue.enqueue(() => processDocument(doc));
 
     res.status(result.status === "saved" ? 200 : 422).json({
       id: result.id,
